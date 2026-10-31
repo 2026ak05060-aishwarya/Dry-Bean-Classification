@@ -1,7 +1,7 @@
 import joblib
 
 # Save the fitted scaler
-joblib.dump(scaler, "model/scaler.joblib")
+scaler = joblib.load("model/scaler.joblib")
 
 # Save held-out test data
 test_data = X_test.copy()

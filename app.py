@@ -1,12 +1,13 @@
 
-import streamlit as st
-import pandas as pd
-import numpy as np
+from pathlib import Path
+
 import joblib
+import numpy as np
+import pandas as pd
+import streamlit as st
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-from pathlib import Path
 from sklearn.metrics import (
     accuracy_score,
     roc_auc_score,
@@ -15,30 +16,21 @@ from sklearn.metrics import (
     f1_score,
     matthews_corrcoef,
     confusion_matrix,
-    classification_report
+    classification_report,
+    ConfusionMatrixDisplay
 )
 
-# --------------------------------------------------
-# 1. PAGE CONFIGURATION
-# --------------------------------------------------
-
-st.set_page_config(
-    page_title="Dry Bean Classification",
-    page_icon="🌱",
-    layout="wide"
-)
-
-st.title("Dry Bean Classification")
-st.write(
-    "Classification of Dry Bean varieties using "
-    "Machine Learning algorithms."
-)
 
 # --------------------------------------------------
-# 2. DATASET FEATURES
+# 1. PATHS AND CONFIGURATION
 # --------------------------------------------------
 
-feature_columns = [
+ROOT = Path(__file__).resolve().parent
+MODEL_DIR = ROOT / "model"
+
+TARGET = "Class"
+
+FEATURES = [
     "Area",
     "Perimeter",
     "MajorAxisLength",
@@ -57,53 +49,145 @@ feature_columns = [
     "ShapeFactor4"
 ]
 
-# --------------------------------------------------
-# 3. MODEL FILE PATHS
-# --------------------------------------------------
-
-BASE_DIR = Path(__file__).resolve().parent
-MODEL_DIR = BASE_DIR / "model"
-
-model_files = {
+MODEL_FILES = {
     "Logistic Regression": "logistic_regression.joblib",
     "Decision Tree": "decision_tree.joblib",
-    "KNN": "knn.joblib",
+    "K-Nearest Neighbors": "knn.joblib",
     "Gaussian Naive Bayes": "gaussian_naive_bayes.joblib",
-    "SVM": "svm.joblib"
+    "Support Vector Machine": "svm.joblib"
 }
 
-scaled_models = [
+SCALED_MODELS = [
     "Logistic Regression",
-    "KNN",
-    "SVM"
+    "K-Nearest Neighbors",
+    "Support Vector Machine"
 ]
 
+
 # --------------------------------------------------
-# 4. LOAD MODEL
+# 2. PAGE CONFIGURATION
+# --------------------------------------------------
+
+st.set_page_config(
+    page_title="Dry Bean Classification",
+    page_icon="🌱",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+
+# --------------------------------------------------
+# 3. CUSTOM STYLING
+# --------------------------------------------------
+
+st.markdown("""
+<style>
+
+.block-container {
+    padding-top: 1.5rem;
+    padding-bottom: 2rem;
+    max-width: 1450px;
+}
+
+[data-testid="stSidebar"] {
+    border-right: 1px solid rgba(128,128,128,.25);
+}
+
+.hero {
+    padding: 1.35rem 1.5rem;
+    border-radius: 18px;
+    background: linear-gradient(115deg,#174734,#47865c);
+    color: white;
+    margin-bottom: 1rem;
+}
+
+.hero h1 {
+    font-size: 2rem;
+    margin: 0 0 .35rem 0;
+    color: white;
+}
+
+.hero p {
+    font-size: 1rem;
+    margin: 0;
+    color: #e6f4e9;
+}
+
+.metric-card {
+    border: 1px solid rgba(128,128,128,.28);
+    border-radius: 14px;
+    padding: 1rem 1.1rem;
+    min-height: 110px;
+}
+
+.metric-label {
+    font-size: .85rem;
+    opacity: .8;
+    margin-bottom: .35rem;
+}
+
+.metric-value {
+    font-size: 1.65rem;
+    font-weight: 700;
+    line-height: 1.2;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+
+# --------------------------------------------------
+# 4. METRIC CARD
+# --------------------------------------------------
+
+def metric_card(label, value):
+
+    shown = (
+        "N/A"
+        if value is None or pd.isna(value)
+        else f"{value:.4f}"
+    )
+
+    st.markdown(
+        f'<div class="metric-card">'
+        f'<div class="metric-label">{label}</div>'
+        f'<div class="metric-value">{shown}</div>'
+        f'</div>',
+        unsafe_allow_html=True
+    )
+
+
+# --------------------------------------------------
+# 5. AVAILABLE MODELS
+# --------------------------------------------------
+
+def load_available_models():
+
+    return {
+        name: MODEL_DIR / filename
+        for name, filename in MODEL_FILES.items()
+        if (MODEL_DIR / filename).is_file()
+    }
+
+
+# --------------------------------------------------
+# 6. LOAD SELECTED MODEL AND SCALER
 # --------------------------------------------------
 
 @st.cache_resource
-def load_model(model_name):
-
-    model_path = MODEL_DIR / model_files[model_name]
-
-    if not model_path.exists():
-        raise FileNotFoundError(
-            f"Model file not found: {model_path}"
-        )
+def load_selected_model(
+    model_name,
+    model_path,
+    model_mtime,
+    scaler_path,
+    scaler_mtime
+):
 
     model = joblib.load(model_path)
 
     scaler = None
 
-    if model_name in scaled_models:
-
-        scaler_path = MODEL_DIR / "scaler.joblib"
-
-        if not scaler_path.exists():
-            raise FileNotFoundError(
-                "Scaler file not found."
-            )
+    if model_name in SCALED_MODELS:
 
         scaler = joblib.load(scaler_path)
 
@@ -111,263 +195,679 @@ def load_model(model_name):
 
 
 # --------------------------------------------------
-# 5. UPLOAD TEST DATA
+# 7. EVALUATE MODEL
 # --------------------------------------------------
 
-st.sidebar.header("Upload Test Dataset")
+def evaluate_one(name, model_path, X, y_true):
 
-uploaded_file = st.sidebar.file_uploader(
-    "Upload CSV file",
-    type=["csv"]
-)
+    scaler_path = MODEL_DIR / "scaler.joblib"
 
-if uploaded_file is not None:
+    if not model_path.is_file():
+        raise FileNotFoundError(
+            f"Model file not found: {model_path.name}"
+        )
 
-    try:
-        data = pd.read_csv(uploaded_file)
+    if name in SCALED_MODELS and not scaler_path.is_file():
+        raise FileNotFoundError(
+            "scaler.joblib not found in model folder."
+        )
 
-    except Exception as e:
-        st.error(f"Unable to read the CSV file: {e}")
-        st.stop()
+    model_mtime = model_path.stat().st_mtime_ns
 
-else:
+    scaler_mtime = (
+        scaler_path.stat().st_mtime_ns
+        if scaler_path.exists()
+        else 0
+    )
 
-    default_file = BASE_DIR / "test_data.csv"
+    model, scaler = load_selected_model(
+        name,
+        str(model_path),
+        model_mtime,
+        str(scaler_path),
+        scaler_mtime
+    )
 
-    if default_file.exists():
-        data = pd.read_csv(default_file)
-        st.sidebar.info("Using the default test dataset.")
+    # Preserve the original feature order
+    X_model = X[FEATURES].copy()
+
+    # Apply scaling only to the models trained with scaled data
+    if scaler is not None:
+
+        X_processed = scaler.transform(X_model)
 
     else:
-        st.warning("Please upload your test_data.csv file.")
-        st.stop()
+
+        X_processed = X_model
+
+    # Predictions
+    y_pred = model.predict(X_processed)
+
+    # Evaluation metrics
+    accuracy = accuracy_score(y_true, y_pred)
+
+    precision = precision_score(
+        y_true,
+        y_pred,
+        average="weighted",
+        zero_division=0
+    )
+
+    recall = recall_score(
+        y_true,
+        y_pred,
+        average="weighted",
+        zero_division=0
+    )
+
+    f1 = f1_score(
+        y_true,
+        y_pred,
+        average="weighted",
+        zero_division=0
+    )
+
+    mcc = matthews_corrcoef(y_true, y_pred)
+
+    # Multiclass AUC - One vs Rest
+    try:
+
+        probabilities = model.predict_proba(X_processed)
+
+        auc = roc_auc_score(
+            y_true,
+            probabilities,
+            labels=model.classes_,
+            multi_class="ovr",
+            average="weighted"
+        )
+
+    except (ValueError, AttributeError):
+        auc = np.nan
+
+    metrics = {
+        "Model": name,
+        "Accuracy": accuracy,
+        "AUC": auc,
+        "Precision": precision,
+        "Recall": recall,
+        "F1": f1,
+        "MCC": mcc
+    }
+
+    return model, y_pred, metrics, X_model
+
 
 # --------------------------------------------------
-# 6. DISPLAY DATASET
+# 8. SIDEBAR NAVIGATION
 # --------------------------------------------------
 
-st.subheader("Dataset Overview")
+with st.sidebar:
 
-col1, col2 = st.columns(2)
+    st.markdown("## 🌱 Dry Bean")
+    st.caption("Dry Bean Classification · ML Assignment")
 
-col1.metric("Total Records", len(data))
-col2.metric("Total Features", len(feature_columns))
+    page = st.radio(
+        "NAVIGATION",
+        [
+            "Overview",
+            "Evaluate models",
+            "Compare models",
+            "Dataset & methodology"
+        ]
+    )
 
-st.dataframe(data.head())
+    st.divider()
+
+    st.markdown("**Test dataset**")
+
+    uploaded = st.file_uploader(
+        "Upload a labelled test CSV",
+        type=["csv"],
+        help=(
+            "CSV must contain all 16 input features "
+            "and the target column Class."
+        )
+    )
+
+    st.caption("Expected target column: Class")
+
+    st.divider()
+
+    st.caption(
+        "Saved models are loaded from the model/ folder. "
+        "Uploaded data is used only for evaluation."
+    )
+
 
 # --------------------------------------------------
-# 7. DATA VALIDATION
+# 9. HEADER
 # --------------------------------------------------
 
-required_columns = feature_columns + ["Class"]
+st.markdown(
+    '<div class="hero">'
+    '<h1>Dry Bean Classification</h1>'
+    '<p>Evaluate and compare five machine-learning '
+    'classifiers for Dry Bean variety prediction.</p>'
+    '</div>',
+    unsafe_allow_html=True
+)
 
-missing_columns = [
-    col for col in required_columns
-    if col not in data.columns
-]
 
-if missing_columns:
+# --------------------------------------------------
+# 10. CHECK MODEL FILES
+# --------------------------------------------------
+
+available_models = load_available_models()
+
+if not available_models:
 
     st.error(
-        f"Missing columns in dataset: {missing_columns}"
+        "No trained model files were found in the model/ folder."
     )
+
     st.stop()
 
-X = data[feature_columns].apply(
-    pd.to_numeric,
-    errors="coerce"
-)
+missing_models = [
+    name
+    for name in MODEL_FILES
+    if name not in available_models
+]
 
-y = data["Class"]
+if missing_models:
 
-if X.isnull().values.any():
+    st.warning(
+        "Some model files are missing: "
+        + ", ".join(missing_models)
+    )
 
-    st.error("Missing or invalid feature values found.")
-    st.stop()
-
-if y.isnull().any():
-
-    st.error("Missing values found in the Class column.")
-    st.stop()
-
-if not np.isfinite(X.to_numpy()).all():
-
-    st.error("Infinite values found in the dataset.")
-    st.stop()
 
 # --------------------------------------------------
-# 8. MODEL SELECTION
+# 11. LOAD TEST DATASET
 # --------------------------------------------------
 
-st.sidebar.header("Select Model")
-
-selected_model = st.sidebar.selectbox(
-    "Choose a classification algorithm",
-    list(model_files.keys())
-)
-
-st.subheader(selected_model)
-
-# --------------------------------------------------
-# 9. MODEL EVALUATION
-# --------------------------------------------------
-
-if st.button("Run Evaluation"):
+if uploaded is not None:
 
     try:
 
-        with st.spinner("Loading model and evaluating..."):
-
-            model, scaler = load_model(selected_model)
-
-            # Apply scaling where required
-            if scaler is not None:
-                X_processed = scaler.transform(X)
-            else:
-                X_processed = X
-
-            # Predictions
-            predictions = model.predict(X_processed)
-
-            # Evaluation metrics
-            accuracy = accuracy_score(y, predictions)
-
-            precision = precision_score(
-                y,
-                predictions,
-                average="weighted",
-                zero_division=0
-            )
-
-            recall = recall_score(
-                y,
-                predictions,
-                average="weighted",
-                zero_division=0
-            )
-
-            f1 = f1_score(
-                y,
-                predictions,
-                average="weighted",
-                zero_division=0
-            )
-
-            mcc = matthews_corrcoef(y, predictions)
-
-            # Multiclass AUC
-            try:
-
-                probabilities = model.predict_proba(
-                    X_processed
-                )
-
-                auc = roc_auc_score(
-                    y,
-                    probabilities,
-                    labels=model.classes_,
-                    multi_class="ovr",
-                    average="weighted"
-                )
-
-            except (ValueError, AttributeError):
-                auc = None
-
-        # --------------------------------------------------
-        # 10. DISPLAY METRICS
-        # --------------------------------------------------
-
-        st.subheader("Performance Metrics")
-
-        c1, c2, c3 = st.columns(3)
-
-        c1.metric("Accuracy", f"{accuracy:.4f}")
-
-        c2.metric(
-            "AUC",
-            "N/A" if auc is None else f"{auc:.4f}"
+        test_df = pd.read_csv(
+            uploaded,
+            keep_default_na=False
         )
 
-        c3.metric("Precision", f"{precision:.4f}")
+        data_source = f"Uploaded file: {uploaded.name}"
 
-        c4, c5, c6 = st.columns(3)
+    except Exception as exc:
 
-        c4.metric("Recall", f"{recall:.4f}")
-        c5.metric("F1 Score", f"{f1:.4f}")
-        c6.metric("MCC", f"{mcc:.4f}")
-
-        # --------------------------------------------------
-        # 11. PREDICTION RESULTS
-        # --------------------------------------------------
-
-        st.subheader("Prediction Results")
-
-        results = pd.DataFrame({
-            "Actual Class": y,
-            "Predicted Class": predictions
-        })
-
-        st.dataframe(results)
-
-        # --------------------------------------------------
-        # 12. CONFUSION MATRIX
-        # --------------------------------------------------
-
-        st.subheader("Confusion Matrix")
-
-        class_labels = model.classes_
-
-        cm = confusion_matrix(
-            y,
-            predictions,
-            labels=class_labels
-        )
-
-        fig, ax = plt.subplots(figsize=(10, 7))
-
-        sns.heatmap(
-            cm,
-            annot=True,
-            fmt="d",
-            cmap="Blues",
-            xticklabels=class_labels,
-            yticklabels=class_labels,
-            ax=ax
-        )
-
-        ax.set_xlabel("Predicted Class")
-        ax.set_ylabel("Actual Class")
-        ax.set_title("Confusion Matrix")
-
-        st.pyplot(fig)
-        plt.close(fig)
-
-        # --------------------------------------------------
-        # 13. CLASSIFICATION REPORT
-        # --------------------------------------------------
-
-        st.subheader("Classification Report")
-
-        report = classification_report(
-            y,
-            predictions,
-            zero_division=0
-        )
-
-        st.text(report)
-
-    except Exception as e:
-
-        st.error(
-            f"Error while evaluating {selected_model}: {e}"
-        )
+        st.error(f"Could not read uploaded CSV: {exc}")
+        st.stop()
 
 else:
 
-    st.info("Click 'Run Evaluation' to evaluate the selected model.")
+    bundled_test = ROOT / "test_data.csv"
+
+    if bundled_test.exists():
+
+        try:
+
+            test_df = pd.read_csv(
+                bundled_test,
+                keep_default_na=False
+            )
+
+            data_source = "Bundled test_data.csv"
+
+        except Exception as exc:
+
+            st.error(f"Could not read test_data.csv: {exc}")
+            st.stop()
+
+    else:
+
+        test_df = None
+        data_source = "No test data loaded"
+
 
 # --------------------------------------------------
-# 14. FOOTER
+# 12. OVERVIEW PAGE
+# --------------------------------------------------
+
+if page == "Overview":
+
+    c1, c2, c3 = st.columns(3)
+
+    c1.metric("Algorithms", "5", "Classification models")
+    c2.metric("Input features", "16", "Numerical features")
+    c3.metric("Target classes", "7", "Bean varieties")
+
+    st.subheader("Project at a glance")
+
+    left, right = st.columns([1.3, 1])
+
+    with left:
+
+        st.markdown("""
+        **Objective**
+
+        Predict the variety of Dry Beans using numerical
+        characteristics and compare five machine-learning
+        classification algorithms.
+
+        **Models included**
+
+        - Logistic Regression
+        - Decision Tree Classifier
+        - K-Nearest Neighbors
+        - Gaussian Naive Bayes
+        - Support Vector Machine
+        """)
+
+    with right:
+
+        st.markdown("### Evaluation workflow")
+
+        st.markdown("""
+        1. Train and save models.
+        2. Upload labelled test data.
+        3. Select a model or compare all five.
+        4. Review performance metrics.
+        5. Examine the confusion matrix and classification report.
+        """)
+
+        st.info(
+            "The application uses previously trained models. "
+            "It does not retrain models using uploaded data."
+        )
+
+    st.subheader("Current test data")
+
+    st.write(data_source)
+
+    if test_df is None:
+
+        st.warning(
+            "No test CSV is available. Add test_data.csv "
+            "to the project root or upload a CSV."
+        )
+
+    else:
+
+        st.write(
+            f"**{len(test_df):,} rows · "
+            f"{len(test_df.columns)} columns**"
+        )
+
+        st.dataframe(
+            test_df.head(8),
+            use_container_width=True
+        )
+
+
+# --------------------------------------------------
+# 13. DATASET AND METHODOLOGY PAGE
+# --------------------------------------------------
+
+elif page == "Dataset & methodology":
+
+    st.subheader("Dataset and experimental setup")
+
+    st.markdown("""
+    **Dataset:** Dry Bean Dataset.
+
+    **Target:** `Class`, representing one of seven Dry Bean varieties.
+
+    **Input features:** 16 numerical characteristics of the beans.
+
+    **Data preprocessing:**
+    - Duplicate records removed.
+    - Features and target separated.
+    - Stratified 80:20 train-test split.
+    - Random state set to 42.
+    - StandardScaler applied to Logistic Regression,
+      KNN and SVM.
+    - Decision Tree and Gaussian Naive Bayes use
+      unscaled features.
+
+    **Model parameters:**
+    - Logistic Regression: max_iter=2000.
+    - Decision Tree: random_state=42.
+    - KNN: n_neighbors=5.
+    - Gaussian Naive Bayes: default parameters.
+    - SVM: RBF kernel, probability=True.
+
+    **Evaluation metrics:**
+    - Accuracy
+    - Multiclass ROC AUC (One-vs-Rest)
+    - Weighted Precision
+    - Weighted Recall
+    - Weighted F1-score
+    - Matthews Correlation Coefficient (MCC)
+    """)
+
+    st.info(
+        "The scaler and trained models are loaded from "
+        "the saved files in the model/ folder."
+    )
+
+    st.warning(
+        "Uploaded data is used only for evaluating "
+        "the saved models. No retraining takes place."
+    )
+
+
+# --------------------------------------------------
+# 14. EVALUATION AND COMPARISON PAGES
+# --------------------------------------------------
+
+elif page in ("Evaluate models", "Compare models"):
+
+    if test_df is None:
+
+        st.warning(
+            "Upload a labelled test CSV using the sidebar "
+            "or add test_data.csv to the project root."
+        )
+
+        st.stop()
+
+    # Validate target
+    if TARGET not in test_df.columns:
+
+        st.error(
+            "The CSV must contain the target column 'Class'."
+        )
+
+        st.stop()
+
+    # Validate features
+    missing_features = [
+        col for col in FEATURES
+        if col not in test_df.columns
+    ]
+
+    if missing_features:
+
+        st.error(
+            "Missing required feature columns: "
+            + ", ".join(missing_features)
+        )
+
+        st.stop()
+
+    # Extract target
+    y_true = test_df[TARGET].astype(str).str.strip()
+
+    if y_true.eq("").any():
+
+        st.error("The Class column contains empty values.")
+        st.stop()
+
+    # Extract features
+    X = test_df[FEATURES].apply(
+        pd.to_numeric,
+        errors="coerce"
+    )
+
+    if X.isnull().values.any():
+
+        st.error(
+            "Feature columns contain missing or non-numeric values."
+        )
+
+        st.stop()
+
+    if not np.isfinite(X.to_numpy()).all():
+
+        st.error(
+            "Feature columns contain infinite values."
+        )
+
+        st.stop()
+
+    st.caption(
+        f"Data source: {data_source} · "
+        f"{len(test_df):,} labelled rows"
+    )
+
+
+    # --------------------------------------------------
+    # 15. EVALUATE ONE MODEL
+    # --------------------------------------------------
+
+    if page == "Evaluate models":
+
+        model_name = st.selectbox(
+            "Choose a classifier",
+            list(available_models.keys())
+        )
+
+        try:
+
+            model, y_pred, metrics, X_used = evaluate_one(
+                model_name,
+                available_models[model_name],
+                X,
+                y_true
+            )
+
+        except Exception as exc:
+
+            st.error(
+                f"Could not evaluate {model_name}: {exc}"
+            )
+
+            st.stop()
+
+        st.subheader(
+            f"{model_name} — Evaluation Summary"
+        )
+
+        # Metric cards
+        metric_cols = st.columns(6)
+
+        metric_names = [
+            "Accuracy",
+            "AUC",
+            "Precision",
+            "Recall",
+            "F1",
+            "MCC"
+        ]
+
+        for col, label in zip(metric_cols, metric_names):
+
+            with col:
+
+                metric_card(
+                    label,
+                    metrics[label]
+                )
+
+        st.divider()
+
+        # Tabs
+        tab1, tab2, tab3 = st.tabs([
+            "Confusion Matrix",
+            "Classification Report",
+            "Test Data Preview"
+        ])
+
+        # Confusion Matrix
+        with tab1:
+
+            class_labels = model.classes_
+
+            cm = confusion_matrix(
+                y_true,
+                y_pred,
+                labels=class_labels
+            )
+
+            fig, ax = plt.subplots(figsize=(9, 6))
+
+            disp = ConfusionMatrixDisplay(
+                confusion_matrix=cm,
+                display_labels=class_labels
+            )
+
+            disp.plot(
+                ax=ax,
+                colorbar=False,
+                cmap="Blues",
+                values_format="d",
+                xticks_rotation=45
+            )
+
+            ax.set_title(model_name)
+            fig.tight_layout()
+
+            st.pyplot(fig)
+            plt.close(fig)
+
+        # Classification Report
+        with tab2:
+
+            report = classification_report(
+                y_true,
+                y_pred,
+                labels=model.classes_,
+                output_dict=True,
+                zero_division=0
+            )
+
+            report_df = pd.DataFrame(report).T
+
+            st.dataframe(
+                report_df.style.format("{:.4f}"),
+                use_container_width=True
+            )
+
+        # Test Data Preview
+        with tab3:
+
+            preview = X_used.copy()
+
+            preview["Actual Class"] = y_true.values
+            preview["Predicted Class"] = y_pred
+
+            st.dataframe(
+                preview.head(100),
+                use_container_width=True
+            )
+
+            st.download_button(
+                "Download predictions CSV",
+                preview.to_csv(index=False),
+                "dry_bean_predictions.csv",
+                "text/csv"
+            )
+
+
+    # --------------------------------------------------
+    # 16. COMPARE ALL MODELS
+    # --------------------------------------------------
+
+    else:
+
+        st.subheader("Compare All Classification Models")
+
+        st.write(
+            "All available models are evaluated on the same "
+            "test dataset. No model is retrained in this app."
+        )
+
+        metric_rows = []
+        failures = []
+
+        for name, model_path in available_models.items():
+
+            try:
+
+                _, _, metrics, _ = evaluate_one(
+                    name,
+                    model_path,
+                    X,
+                    y_true
+                )
+
+                metric_rows.append(metrics)
+
+            except Exception as exc:
+
+                failures.append(
+                    f"{name}: {exc}"
+                )
+
+        if failures:
+
+            for failure in failures:
+
+                st.warning(failure)
+
+        if not metric_rows:
+
+            st.error(
+                "No model could be evaluated. "
+                "Check your model files and test dataset."
+            )
+
+            st.stop()
+
+        results = (
+            pd.DataFrame(metric_rows)
+            .set_index("Model")
+        )
+
+        st.dataframe(
+            results.style.format("{:.4f}").highlight_max(
+                axis=0,
+                props="font-weight: bold;"
+            ),
+            use_container_width=True
+        )
+
+        st.subheader("Metric Comparison")
+
+        selected_metrics = st.multiselect(
+            "Metrics to plot",
+            [
+                "Accuracy",
+                "AUC",
+                "Precision",
+                "Recall",
+                "F1",
+                "MCC"
+            ],
+            default=[
+                "Accuracy",
+                "AUC",
+                "F1",
+                "MCC"
+            ]
+        )
+
+        if selected_metrics:
+
+            st.bar_chart(
+                results[selected_metrics],
+                use_container_width=True
+            )
+
+        st.download_button(
+            "Download comparison CSV",
+            results.reset_index().to_csv(index=False),
+            "dry_bean_model_comparison.csv",
+            "text/csv"
+        )
+
+        st.info(
+            "Select a model under 'Evaluate models' to inspect "
+            "its confusion matrix and classification report."
+        )
+
+
+# --------------------------------------------------
+# 17. FOOTER
 # --------------------------------------------------
 
 st.divider()

@@ -1,56 +1,27 @@
 
+import os
+import joblib
 import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
 
+from pathlib import Path
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 
-# 1. Load Excel Dataset
-df = pd.read_excel("Dry_Bean_Dataset.xlsx")
+# Project paths
+BASE_DIR = Path(__file__).resolve().parent.parent
+MODEL_DIR = BASE_DIR / "model"
 
-print("DATASET OVERVIEW")
-print("---------------------------")
-print("Shape:", df.shape)
-print("\nFirst 5 Rows:\n", df.head())
-print("\nDataset Information:")
-df.info()
-print("\nStatistical Summary:\n", df.describe())
+# Load dataset
+data = pd.read_excel(BASE_DIR / "Dry_Bean_Dataset.xlsx")
 
-# 2. Check Missing Values and Duplicates
-print("\nMissing Values:\n", df.isnull().sum())
-print("\nDuplicate Rows:", df.duplicated().sum())
+# Remove duplicates
+data = data.drop_duplicates()
 
-# Remove duplicate rows
-df = df.drop_duplicates().reset_index(drop=True)
+# Separate features and target
+X = data.drop("Class", axis=1)
+y = data["Class"]
 
-print("\nShape After Cleaning:", df.shape)
-
-# 3. Class Distribution
-print("\nClass Distribution:\n", df["Class"].value_counts())
-
-plt.figure(figsize=(10, 5))
-sns.countplot(
-    data=df,
-    x="Class",
-    order=df["Class"].value_counts().index
-)
-plt.title("Distribution of Dry Bean Classes")
-plt.xlabel("Bean Class")
-plt.ylabel("Number of Instances")
-plt.xticks(rotation=30)
-plt.tight_layout()
-plt.show()
-
-# 4. Separate Features and Target
-X = df.drop(columns=["Class"])
-y = df["Class"]
-
-print("\nFeatures Shape:", X.shape)
-print("Target Shape:", y.shape)
-
-# 5. Train-Test Split (80:20)
+# Split dataset
 X_train, X_test, y_train, y_test = train_test_split(
     X,
     y,
@@ -59,23 +30,26 @@ X_train, X_test, y_train, y_test = train_test_split(
     stratify=y
 )
 
-print("\nTraining Data:", X_train.shape)
-print("Testing Data:", X_test.shape)
-
-# 6. Feature Scaling
+# Standardize features
 scaler = StandardScaler()
 
 X_train_scaled = scaler.fit_transform(X_train)
 X_test_scaled = scaler.transform(X_test)
 
-print("\nFeature Scaling Completed")
+# Create model directory
+MODEL_DIR.mkdir(exist_ok=True)
 
-# 7. Save Test Dataset as CSV for Streamlit
+# Save scaler
+joblib.dump(scaler, MODEL_DIR / "scaler.joblib", compress=3)
+
+# Save test dataset
 test_data = X_test.copy()
 test_data["Class"] = y_test
 
-test_data.to_csv("test_data.csv", index=False)
+test_data.to_csv(BASE_DIR / "test_data.csv", index=False)
 
-print("\nTest Dataset Saved Successfully")
-print("Test Dataset Shape:", test_data.shape)
-print("\nDataset Ready for Model Training!")
+print("Data preprocessing completed successfully.")
+print("Training records:", len(X_train))
+print("Testing records:", len(X_test))
+print("Features:", X.shape[1])
+print("Classes:", y.nunique())

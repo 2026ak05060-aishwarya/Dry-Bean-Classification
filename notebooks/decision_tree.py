@@ -1,40 +1,29 @@
 
-from sklearn.tree import DecisionTreeClassifier
-from sklearn.metrics import *
-import matplotlib.pyplot as plt
-import seaborn as sns
+import sys
 import joblib
-import os
 
-os.makedirs("model", exist_ok=True)
+from pathlib import Path
+from sklearn.tree import DecisionTreeClassifier
 
-# Train model
-dt = DecisionTreeClassifier(random_state=42)
-dt.fit(X_train, y_train)
+BASE_DIR = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-# Predictions
-y_pred = dt.predict(X_test)
-y_prob = dt.predict_proba(X_test)
+from data_preprocessing import (
+    X_train,
+    y_train,
+    MODEL_DIR
+)
 
-# Evaluation
-print("DECISION TREE")
-print("Accuracy :", accuracy_score(y_test, y_pred))
-print("AUC      :", roc_auc_score(y_test, y_prob, multi_class="ovr", average="weighted", labels=dt.classes_))
-print("Precision:", precision_score(y_test, y_pred, average="weighted", zero_division=0))
-print("Recall   :", recall_score(y_test, y_pred, average="weighted", zero_division=0))
-print("F1 Score :", f1_score(y_test, y_pred, average="weighted", zero_division=0))
-print("MCC      :", matthews_corrcoef(y_test, y_pred))
+model = DecisionTreeClassifier(
+    random_state=42
+)
 
-# Confusion Matrix
-sns.heatmap(confusion_matrix(y_test, y_pred, labels=dt.classes_),
-            annot=True, fmt="d", cmap="Greens",
-            xticklabels=dt.classes_, yticklabels=dt.classes_)
-plt.title("Decision Tree - Confusion Matrix")
-plt.xlabel("Predicted")
-plt.ylabel("Actual")
-plt.xticks(rotation=45)
-plt.tight_layout()
-plt.show()
+model.fit(X_train, y_train)
 
-# Save model
-joblib.dump(dt, "model/decision_tree.joblib")
+joblib.dump(
+    model,
+    MODEL_DIR / "decision_tree.joblib",
+    compress=3
+)
+
+print("Decision Tree trained and saved successfully.")

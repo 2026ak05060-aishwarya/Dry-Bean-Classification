@@ -3,23 +3,25 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import joblib
+import matplotlib.pyplot as plt
+import seaborn as sns
 
+from pathlib import Path
 from sklearn.metrics import (
     accuracy_score,
+    roc_auc_score,
     precision_score,
     recall_score,
     f1_score,
     matthews_corrcoef,
-    roc_auc_score,
     confusion_matrix,
     classification_report
 )
 
-import matplotlib.pyplot as plt
-import seaborn as sns
+# --------------------------------------------------
+# 1. PAGE CONFIGURATION
+# --------------------------------------------------
 
-
-# Page configuration
 st.set_page_config(
     page_title="Dry Bean Classification",
     page_icon="🌱",
@@ -27,30 +29,15 @@ st.set_page_config(
 )
 
 st.title("Dry Bean Classification")
-st.write("Multiclass classification using five machine learning algorithms.")
+st.write(
+    "Classification of Dry Bean varieties using "
+    "Machine Learning algorithms."
+)
 
+# --------------------------------------------------
+# 2. DATASET FEATURES
+# --------------------------------------------------
 
-# Load trained models and scaler
-@st.cache_resource
-def load_models():
-
-    models = {
-        "Logistic Regression": joblib.load("model/logistic_regression.joblib"),
-        "Decision Tree": joblib.load("model/decision_tree.joblib"),
-        "KNN": joblib.load("model/knn.joblib"),
-        "Gaussian Naive Bayes": joblib.load("model/gaussian_naive_bayes.joblib"),
-        "SVM": joblib.load("model/svm.joblib")
-    }
-
-    scaler = joblib.load("model/scaler.joblib")
-
-    return models, scaler
-
-
-models, scaler = load_models()
-
-
-# Expected feature columns
 feature_columns = [
     "Area",
     "Perimeter",
@@ -70,133 +57,321 @@ feature_columns = [
     "ShapeFactor4"
 ]
 
+# --------------------------------------------------
+# 3. MODEL FILE PATHS
+# --------------------------------------------------
 
-# Upload test dataset
-st.subheader("Upload Test Dataset")
+BASE_DIR = Path(__file__).resolve().parent
+MODEL_DIR = BASE_DIR / "model"
 
-uploaded_file = st.file_uploader(
-    "Upload a CSV file containing the features and Class column",
+model_files = {
+    "Logistic Regression": "logistic_regression.joblib",
+    "Decision Tree": "decision_tree.joblib",
+    "KNN": "knn.joblib",
+    "Gaussian Naive Bayes": "gaussian_naive_bayes.joblib",
+    "SVM": "svm.joblib"
+}
+
+scaled_models = [
+    "Logistic Regression",
+    "KNN",
+    "SVM"
+]
+
+# --------------------------------------------------
+# 4. LOAD MODEL
+# --------------------------------------------------
+
+@st.cache_resource
+def load_model(model_name):
+
+    model_path = MODEL_DIR / model_files[model_name]
+
+    if not model_path.exists():
+        raise FileNotFoundError(
+            f"Model file not found: {model_path}"
+        )
+
+    model = joblib.load(model_path)
+
+    scaler = None
+
+    if model_name in scaled_models:
+
+        scaler_path = MODEL_DIR / "scaler.joblib"
+
+        if not scaler_path.exists():
+            raise FileNotFoundError(
+                "Scaler file not found."
+            )
+
+        scaler = joblib.load(scaler_path)
+
+    return model, scaler
+
+
+# --------------------------------------------------
+# 5. UPLOAD TEST DATA
+# --------------------------------------------------
+
+st.sidebar.header("Upload Test Dataset")
+
+uploaded_file = st.sidebar.file_uploader(
+    "Upload CSV file",
     type=["csv"]
 )
 
-
 if uploaded_file is not None:
 
-    data = pd.read_csv(uploaded_file)
+    try:
+        data = pd.read_csv(uploaded_file)
 
-    st.write("Dataset Preview")
-    st.dataframe(data.head())
+    except Exception as e:
+        st.error(f"Unable to read the CSV file: {e}")
+        st.stop()
 
-    if "Class" not in data.columns:
-        st.error("The uploaded CSV must contain a 'Class' column.")
+else:
 
-    elif not all(col in data.columns for col in feature_columns):
-        st.error("The uploaded CSV is missing one or more required features.")
+    default_file = BASE_DIR / "test_data.csv"
+
+    if default_file.exists():
+        data = pd.read_csv(default_file)
+        st.sidebar.info("Using the default test dataset.")
 
     else:
+        st.warning("Please upload your test_data.csv file.")
+        st.stop()
 
-        X = data[feature_columns]
-        y = data["Class"]
+# --------------------------------------------------
+# 6. DISPLAY DATASET
+# --------------------------------------------------
 
-        selected_model = st.selectbox(
-            "Select Machine Learning Model",
-            list(models.keys())
-        )
+st.subheader("Dataset Overview")
 
-        if st.button("Evaluate Model"):
+col1, col2 = st.columns(2)
 
-            model = models[selected_model]
+col1.metric("Total Records", len(data))
+col2.metric("Total Features", len(feature_columns))
 
-            # Apply scaling only to models that require it
-            if selected_model in [
-                "Logistic Regression",
-                "KNN",
-                "SVM"
-            ]:
-                X_input = scaler.transform(X)
+st.dataframe(data.head())
+
+# --------------------------------------------------
+# 7. DATA VALIDATION
+# --------------------------------------------------
+
+required_columns = feature_columns + ["Class"]
+
+missing_columns = [
+    col for col in required_columns
+    if col not in data.columns
+]
+
+if missing_columns:
+
+    st.error(
+        f"Missing columns in dataset: {missing_columns}"
+    )
+    st.stop()
+
+X = data[feature_columns].apply(
+    pd.to_numeric,
+    errors="coerce"
+)
+
+y = data["Class"]
+
+if X.isnull().values.any():
+
+    st.error("Missing or invalid feature values found.")
+    st.stop()
+
+if y.isnull().any():
+
+    st.error("Missing values found in the Class column.")
+    st.stop()
+
+if not np.isfinite(X.to_numpy()).all():
+
+    st.error("Infinite values found in the dataset.")
+    st.stop()
+
+# --------------------------------------------------
+# 8. MODEL SELECTION
+# --------------------------------------------------
+
+st.sidebar.header("Select Model")
+
+selected_model = st.sidebar.selectbox(
+    "Choose a classification algorithm",
+    list(model_files.keys())
+)
+
+st.subheader(selected_model)
+
+# --------------------------------------------------
+# 9. MODEL EVALUATION
+# --------------------------------------------------
+
+if st.button("Run Evaluation"):
+
+    try:
+
+        with st.spinner("Loading model and evaluating..."):
+
+            model, scaler = load_model(selected_model)
+
+            # Apply scaling where required
+            if scaler is not None:
+                X_processed = scaler.transform(X)
             else:
-                X_input = X
+                X_processed = X
 
             # Predictions
-            y_pred = model.predict(X_input)
-            y_prob = model.predict_proba(X_input)
+            predictions = model.predict(X_processed)
 
             # Evaluation metrics
-            accuracy = accuracy_score(y, y_pred)
-            precision = precision_score(
-                y, y_pred, average="weighted", zero_division=0
-            )
-            recall = recall_score(
-                y, y_pred, average="weighted", zero_division=0
-            )
-            f1 = f1_score(
-                y, y_pred, average="weighted", zero_division=0
-            )
-            mcc = matthews_corrcoef(y, y_pred)
+            accuracy = accuracy_score(y, predictions)
 
+            precision = precision_score(
+                y,
+                predictions,
+                average="weighted",
+                zero_division=0
+            )
+
+            recall = recall_score(
+                y,
+                predictions,
+                average="weighted",
+                zero_division=0
+            )
+
+            f1 = f1_score(
+                y,
+                predictions,
+                average="weighted",
+                zero_division=0
+            )
+
+            mcc = matthews_corrcoef(y, predictions)
+
+            # Multiclass AUC
             try:
+
+                probabilities = model.predict_proba(
+                    X_processed
+                )
+
                 auc = roc_auc_score(
                     y,
-                    y_prob,
+                    probabilities,
                     labels=model.classes_,
                     multi_class="ovr",
                     average="weighted"
                 )
-            except ValueError:
+
+            except (ValueError, AttributeError):
                 auc = None
 
-            # Display results
-            st.subheader("Evaluation Results")
+        # --------------------------------------------------
+        # 10. DISPLAY METRICS
+        # --------------------------------------------------
 
-            col1, col2, col3 = st.columns(3)
+        st.subheader("Performance Metrics")
 
-            col1.metric("Accuracy", f"{accuracy:.4f}")
-            col2.metric("Precision", f"{precision:.4f}")
-            col3.metric("Recall", f"{recall:.4f}")
+        c1, c2, c3 = st.columns(3)
 
-            col4, col5, col6 = st.columns(3)
+        c1.metric("Accuracy", f"{accuracy:.4f}")
 
-            col4.metric("F1-Score", f"{f1:.4f}")
-            col5.metric(
-                "AUC",
-                f"{auc:.4f}" if auc is not None else "Unavailable"
-            )
-            col6.metric("MCC", f"{mcc:.4f}")
+        c2.metric(
+            "AUC",
+            "N/A" if auc is None else f"{auc:.4f}"
+        )
 
-            # Confusion Matrix
-            st.subheader("Confusion Matrix")
+        c3.metric("Precision", f"{precision:.4f}")
 
-            cm = confusion_matrix(
-                y,
-                y_pred,
-                labels=model.classes_
-            )
+        c4, c5, c6 = st.columns(3)
 
-            fig, ax = plt.subplots(figsize=(9, 6))
+        c4.metric("Recall", f"{recall:.4f}")
+        c5.metric("F1 Score", f"{f1:.4f}")
+        c6.metric("MCC", f"{mcc:.4f}")
 
-            sns.heatmap(
-                cm,
-                annot=True,
-                fmt="d",
-                cmap="Blues",
-                xticklabels=model.classes_,
-                yticklabels=model.classes_,
-                ax=ax
-            )
+        # --------------------------------------------------
+        # 11. PREDICTION RESULTS
+        # --------------------------------------------------
 
-            ax.set_xlabel("Predicted Class")
-            ax.set_ylabel("Actual Class")
+        st.subheader("Prediction Results")
 
-            st.pyplot(fig)
-            plt.close(fig)
+        results = pd.DataFrame({
+            "Actual Class": y,
+            "Predicted Class": predictions
+        })
 
-            # Classification Report
-            st.subheader("Classification Report")
+        st.dataframe(results)
 
-            report = classification_report(
-                y,
-                y_pred,
-                zero_division=0
-            )
+        # --------------------------------------------------
+        # 12. CONFUSION MATRIX
+        # --------------------------------------------------
 
-            st.text(report)
+        st.subheader("Confusion Matrix")
+
+        class_labels = model.classes_
+
+        cm = confusion_matrix(
+            y,
+            predictions,
+            labels=class_labels
+        )
+
+        fig, ax = plt.subplots(figsize=(10, 7))
+
+        sns.heatmap(
+            cm,
+            annot=True,
+            fmt="d",
+            cmap="Blues",
+            xticklabels=class_labels,
+            yticklabels=class_labels,
+            ax=ax
+        )
+
+        ax.set_xlabel("Predicted Class")
+        ax.set_ylabel("Actual Class")
+        ax.set_title("Confusion Matrix")
+
+        st.pyplot(fig)
+        plt.close(fig)
+
+        # --------------------------------------------------
+        # 13. CLASSIFICATION REPORT
+        # --------------------------------------------------
+
+        st.subheader("Classification Report")
+
+        report = classification_report(
+            y,
+            predictions,
+            zero_division=0
+        )
+
+        st.text(report)
+
+    except Exception as e:
+
+        st.error(
+            f"Error while evaluating {selected_model}: {e}"
+        )
+
+else:
+
+    st.info("Click 'Run Evaluation' to evaluate the selected model.")
+
+# --------------------------------------------------
+# 14. FOOTER
+# --------------------------------------------------
+
+st.divider()
+
+st.caption(
+    "Dry Bean Classification | Machine Learning Assignment"
+)

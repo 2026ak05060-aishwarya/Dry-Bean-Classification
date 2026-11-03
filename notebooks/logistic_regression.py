@@ -1,39 +1,30 @@
-from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import *
-import matplotlib.pyplot as plt
-import seaborn as sns
+
+import sys
 import joblib
-import os
 
-os.makedirs("model", exist_ok=True)
+from pathlib import Path
+from sklearn.linear_model import LogisticRegression
 
-# Train model
-lr = LogisticRegression(max_iter=2000, random_state=42)
-lr.fit(X_train_scaled, y_train)
+BASE_DIR = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-# Predictions
-y_pred = lr.predict(X_test_scaled)
-y_prob = lr.predict_proba(X_test_scaled)
+from data_preprocessing import (
+    X_train_scaled,
+    y_train,
+    MODEL_DIR
+)
 
-# Evaluation
-print("LOGISTIC REGRESSION")
-print("Accuracy :", accuracy_score(y_test, y_pred))
-print("AUC      :", roc_auc_score(y_test, y_prob, multi_class="ovr", average="weighted", labels=lr.classes_))
-print("Precision:", precision_score(y_test, y_pred, average="weighted", zero_division=0))
-print("Recall   :", recall_score(y_test, y_pred, average="weighted", zero_division=0))
-print("F1 Score :", f1_score(y_test, y_pred, average="weighted", zero_division=0))
-print("MCC      :", matthews_corrcoef(y_test, y_pred))
+model = LogisticRegression(
+    max_iter=2000,
+    random_state=42
+)
 
-# Confusion Matrix
-sns.heatmap(confusion_matrix(y_test, y_pred, labels=lr.classes_),
-            annot=True, fmt="d", cmap="Blues",
-            xticklabels=lr.classes_, yticklabels=lr.classes_)
-plt.title("Logistic Regression - Confusion Matrix")
-plt.xlabel("Predicted")
-plt.ylabel("Actual")
-plt.xticks(rotation=45)
-plt.tight_layout()
-plt.show()
+model.fit(X_train_scaled, y_train)
 
-# Save model
-joblib.dump(lr, "model/logistic_regression.joblib")
+joblib.dump(
+    model,
+    MODEL_DIR / "logistic_regression.joblib",
+    compress=3
+)
+
+print("Logistic Regression trained and saved successfully.")
